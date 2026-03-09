@@ -13,7 +13,8 @@ import {
   LineChart,
   Line,
 } from "recharts";
-
+import { supabase } from "../lib/supabaseClient";
+import { useRouter } from "next/navigation";
 /** ===================== TIPOS ===================== */
 type ExpenseCategory =
   | "GASOLINA"
@@ -41,6 +42,7 @@ type Expense = {
   amount: number;
   category: ExpenseCategory;
   method: ExpenseMethod;
+  details?: string;
 };
 
 type Income = {
@@ -240,7 +242,9 @@ function Card({
     <div style={{ border: `1px solid ${styles.border}`, borderRadius: 14, padding: 14, background: styles.cardBg }}>
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
         <h2 style={{ margin: 0, fontSize: 16 }}>{title}</h2>
-        <div style={{ marginLeft: "auto" }}>{right}</div>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+ <div style={{ marginLeft: "auto" }}>{right}</div>
+</div>
       </div>
       <div style={{ marginTop: 10 }}>{children}</div>
     </div>
@@ -249,6 +253,28 @@ function Card({
 
 /** ===================== PÁGINA ===================== */
 export default function Page() {
+  const [userId, setUserId] = useState<string | null>(null);
+
+useEffect(() => {
+  async function getUser() {
+    const { data } = await supabase.auth.getUser();
+    setUserId(data.user?.id ?? null);
+  }
+
+  getUser();
+}, []);
+  const router = useRouter();
+  useEffect(() => {
+  async function checkUser() {
+    const { data } = await supabase.auth.getUser();
+
+    if (!data.user) {
+      router.push("/login");
+    }
+  }
+
+  checkUser();
+}, []);
   /** ---------- tema ---------- */
   const [theme, setTheme] = useState<Theme>("light");
   useEffect(() => {
@@ -278,6 +304,51 @@ export default function Page() {
 
   /** ---------- dados ---------- */
   const [entries, setEntries] = useState<Entry[]>([]);
+useEffect(() => {
+  async function carregarEntries() {
+    if (!userId) return;
+
+    const { data, error } = await supabase
+      .from("entries")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date_iso", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao carregar:", error);
+      return;
+    }
+
+    if (data) {
+      const converted: Entry[] = data.map((row: any) => {
+        if (row.type === "expense") {
+          return {
+            id: row.id,
+            type: "expense",
+            dateISO: row.date_iso,
+            amount: Number(row.amount),
+            category: row.category,
+            method: row.method,
+          };
+        }
+
+        return {
+          id: row.id,
+          type: "income",
+          dateISO: row.date_iso,
+          amount: Number(row.amount),
+          source: row.source,
+          patientName: row.patient_name ?? "",
+          method: row.method,
+        };
+      });
+
+      setEntries(converted);
+    }
+  }
+
+  carregarEntries();
+}, [userId]);
   const [budgets, setBudgets] = useState<Budgets>({});
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
 
@@ -305,6 +376,7 @@ export default function Page() {
   /** ---------- forms: gastos ---------- */
   const [expenseAmount, setExpenseAmount] = useState<string>("");
   const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>("MERCADO");
+  const [expenseOtherText, setExpenseOtherText] = useState("");
   const [expenseMethod, setExpenseMethod] = useState<ExpenseMethod>("CRÉDITO");
   const [expenseUseCustomDate, setExpenseUseCustomDate] = useState<boolean>(false);
   const [expenseDate, setExpenseDate] = useState<string>(todayISO());
@@ -441,7 +513,7 @@ export default function Page() {
     const q = qText.trim().toLowerCase();
     if (q) {
       list = list.filter((e) => {
-        if (e.type === "expense") return `${e.category} ${e.method}`.toLowerCase().includes(q);
+   if (e.type === "expense") return `${e.category} ${e.details ?? ""} ${e.method}`.toLowerCase().includes(q);
         const pn = e.patientName ?? "";
         return `${e.source} ${pn} ${e.method}`.toLowerCase().includes(q);
       });
@@ -648,6 +720,52 @@ export default function Page() {
     ensureRecurrencesForMonth(currentMonthKey());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recurring]);
+  useEffect(() => {
+  async function carregarDados() {
+    if (!userId) return;
+
+    const { data, error } = await supabase
+      .from("entries")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date_iso", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao carregar:", error);
+      return;
+    }
+
+ if (data) {
+  const converted: Entry[] = data.map((e: any) => {
+    if (e.type === "expense") {
+      return {
+        id: e.id,
+        type: "expense",
+        dateISO: e.date_iso,
+        amount: Number(e.amount),
+        category: e.category,
+        method: e.method,
+        details: e.details ?? "",
+      };
+    }
+
+    return {
+      id: e.id,
+      type: "income",
+      dateISO: e.date_iso,
+      amount: Number(e.amount),
+      source: e.source,
+      patientName: e.patient_name ?? "",
+      method: e.method,
+    };
+  });
+
+  setEntries(converted);
+}
+  }
+
+  carregarDados();
+}, [userId]);
 
   /** ===================== AÇÕES: ADD/REMOVE ===================== */
   function addExpense() {
@@ -656,17 +774,24 @@ export default function Page() {
       alert("Digite um valor de gasto válido.");
       return;
     }
+    if (expenseCategory === "OUTROS" && !expenseOtherText.trim()) {
+  alert("Digite qual é o outro gasto.");
+  return;
+}
     const dateISO = expenseUseCustomDate ? expenseDate : todayISO();
-    const newItem: Expense = {
-      id: makeId(),
-      type: "expense",
-      dateISO,
-      amount: amt,
-      category: expenseCategory,
-      method: expenseMethod,
-    };
+const newItem: Expense = {
+  id: makeId(),
+  type: "expense",
+  dateISO,
+  amount: amt,
+  category: expenseCategory,
+  method: expenseMethod,
+  details: expenseCategory === "OUTROS" ? expenseOtherText.trim() : undefined,
+};
+    salvarEntry(newItem);
     setEntries((prev) => [newItem, ...prev]);
     setExpenseAmount("");
+    setExpenseOtherText("");
     setCompareResult(null);
     const mk = monthKey(dateISO);
     setSelectedMonth(mk);
@@ -689,6 +814,7 @@ export default function Page() {
       patientName: patientName.trim() || undefined,
       method: incomeMethod,
     };
+    salvarEntry(newItem);
     setEntries((prev) => [newItem, ...prev]);
     setIncomeAmount("");
     setPatientName("");
@@ -698,10 +824,19 @@ export default function Page() {
     setOpenMonth(mk);
   }
 
-  function removeEntry(id: string) {
-    setEntries((prev) => prev.filter((e) => e.id !== id));
-    setCompareResult(null);
+  async function removeEntry(id: string) {
+  setEntries((prev) => prev.filter((e) => e.id !== id));
+  setCompareResult(null);
+
+  const { error } = await supabase
+    .from("entries")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    console.error("Erro ao remover:", error);
   }
+}
 
   function clearAll() {
     if (!confirm("Apagar TODOS os lançamentos, orçamentos e recorrências locais?")) return;
@@ -930,27 +1065,90 @@ export default function Page() {
   );
 
   /** ===================== RENDER ===================== */
+async function salvarEntry(entry: any) {
+  if (!userId) {
+    alert("Usuário não identificado");
+    return;
+  }
+
+  const { error } = await supabase.from("entries").insert([
+    {
+      user_id: userId,
+      type: entry.type,
+      date_iso: entry.dateISO,
+      amount: entry.amount,
+      category: entry.type === "expense" ? entry.category : null,
+      source: entry.type === "income" ? entry.source : null,
+      patient_name: entry.type === "income" ? entry.patientName ?? null : null,
+      method: entry.method,
+      details: entry.type === "expense" ? entry.details ?? null : null,
+    },
+  ]);
+
+  if (error) {
+    alert("Erro ao salvar no banco: " + error.message);
+    console.error(error);
+  }
+}
   return (
     <div style={{ minHeight: "100vh", background: styles.pageBg, color: styles.text }}>
       <div style={{ maxWidth: 1250, margin: "0 auto", padding: 16, fontFamily: "system-ui, Segoe UI, Roboto" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900 }}>GastosLucca</h1>
-            <div style={{ marginTop: 6, color: styles.muted, fontSize: 13 }}>
-              Verde = bom, vermelho = ruim, amarelo = moderado. Dados locais + opção de compartilhar.
-            </div>
-          </div>
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+  <button
+    onClick={async () => {
+      await supabase.auth.signOut();
+      router.push("/login");
+    }}
+    style={{
+      padding: "10px 12px",
+      borderRadius: 10,
+      border: "1px solid #e5e7eb",
+      background: "white",
+      cursor: "pointer",
+      fontWeight: 700,
+    }}
+  >
+    Sair
+  </button>
+</div>
+<div
+  style={{
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+    flexWrap: "wrap",
+    marginBottom: 18,
+  }}
+>
+  <div>
+    <h1 style={{ margin: 0, fontSize: 32, fontWeight: 900 }}>
+      GastosLucca
+    </h1>
+    <div style={{ marginTop: 8, color: styles.muted, fontSize: 14 }}>
+      Controle seus gastos, ganhos e comparações mensais em um só lugar.
+    </div>
+  </div>
 
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button style={secondaryBtn} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-              {theme === "dark" ? "☀️ Claro" : "🌙 Escuro"}
-            </button>
+  <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <button
+      style={secondaryBtn}
+      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+    >
+      {theme === "dark" ? "☀️ Claro" : "🌙 Escuro"}
+    </button>
 
-            <button style={secondaryBtn} onClick={exportJSON}>Exportar JSON</button>
-            <button style={secondaryBtn} onClick={exportCSV}>Exportar CSV</button>
-            {importInput}
-          </div>
-        </div>
+    <button style={secondaryBtn} onClick={exportJSON}>
+      Exportar JSON
+    </button>
+
+    <button style={secondaryBtn} onClick={exportCSV}>
+      Exportar CSV
+    </button>
+
+    {importInput}
+  </div>
+</div>
 
         {/* COMPARTILHAR (simplificado) */}
         <div style={{ marginTop: 12 }}>
@@ -1028,6 +1226,17 @@ export default function Page() {
               </label>
             </div>
 
+{expenseCategory === "OUTROS" && (
+  <label style={{ display: "grid", gap: 6, marginTop: 10 }}>
+    <span style={{ color: styles.muted }}>Qual é o outro?</span>
+    <input
+      style={inputStyle}
+      value={expenseOtherText}
+      onChange={(e) => setExpenseOtherText(e.target.value)}
+      placeholder="Ex.: presente, peça do PC, assinatura..."
+    />
+  </label>
+)}
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
               <label style={{ display: "flex", gap: 8, alignItems: "center", color: styles.muted }}>
                 <input type="checkbox" checked={expenseUseCustomDate} onChange={(e) => setExpenseUseCustomDate(e.target.checked)} />
@@ -1585,10 +1794,12 @@ export default function Page() {
                                       {e.type === "income" ? "Ganho" : "Gasto"}
                                     </td>
                                     <td style={{ padding: 8, borderBottom: `1px solid ${styles.softBorder}` }}>
-                                      {e.type === "income"
-                                        ? `${e.source}${e.patientName ? ` — ${e.patientName}` : ""}`
-                                        : e.category}
-                                    </td>
+ {e.type === "income"
+  ? `${e.source}${e.patientName ? ` - ${e.patientName}` : ""}`
+  : e.category === "OUTROS" && e.details
+? `OUTROS (${e.details})`
+    : e.category}
+</td>
                                     <td style={{ padding: 8, borderBottom: `1px solid ${styles.softBorder}` }}>{e.method}</td>
                                     <td style={{ padding: 8, borderBottom: `1px solid ${styles.softBorder}`, fontWeight: 900 }}>
                                       {formatBRL(e.amount)}
